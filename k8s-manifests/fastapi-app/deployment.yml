@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-app
+  namespace: default
+  labels:
+    app: fastapi-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fastapi-app
+  template:
+    metadata:
+      labels:
+        app: fastapi-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8000"
+    spec:
+      containers:
+      - name: fastapi-app
+        image: atxpaul/fastapi-app:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: "alloy.monitoring.svc.cluster.local:4317"
+        - name: OTEL_EXPORTER_OTLP_TRACES_PROTOCOL
+          value: "grpc"
+        - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+          value: "alloy.monitoring.svc.cluster.local:4317"
+        - name: OTEL_EXPORTER_OTLP_METRICS_PROTOCOL
+          value: "grpc"
+        - name: OTEL_SERVICE_NAME
+          value: "fastapi-app-poc"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "250m"
