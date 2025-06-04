@@ -20,16 +20,16 @@ check_command helm
 
 echo ">>> Iniciando despliegue del PoC de Monitorización en el namespace '$NAMESPACE'..."
 
-# 1. Namespace
+# Namespace
 kubectl create namespace "$NAMESPACE" 2>/dev/null || echo "Namespace '$NAMESPACE' ya existe."
 
-# 2. Repos oficiales
+# Repos oficiales
 helm repo add grafana https://grafana.github.io/helm-charts
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo add minio https://charts.min.io/
 helm repo update
 
-# 3. MinIO standalone + PVC 5Gi + root perms
+# MinIO standalone + PVC 5Gi + root perms
 helm upgrade --install minio minio/minio \
   -n "$NAMESPACE" \
   --set mode=standalone \
@@ -48,7 +48,7 @@ helm upgrade --install minio minio/minio \
   --set serviceAccount.name="minio-instance-sa" \
   --wait
 
-# 4. Crear buckets en MinIO
+# Crear buckets en MinIO
 kubectl run --rm -i -n monitoring create-mimir-buckets \
   --image=minio/mc --restart=Never --command -- sh -c "\
     mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} && \
@@ -60,7 +60,7 @@ kubectl run --rm -i -n monitoring create-mimir-buckets \
     mc ls myminio \
   "
 
-# 5. Loki
+# Loki
 cat <<EOF > loki-values.yaml
 replicaCount: 3
 
@@ -149,7 +149,7 @@ ruler:
 EOF
 helm upgrade --install loki grafana/loki-distributed -n "$NAMESPACE" -f loki-values.yaml --wait
 
-# 6. Tempo
+# Tempo
 cat <<EOF > tempo-values.yaml
 storage:
   trace:
@@ -164,7 +164,7 @@ queryFrontend:
 EOF
 helm upgrade --install tempo grafana/tempo-distributed -n "$NAMESPACE" -f tempo-values.yaml --wait
 
-# 7. Mimir
+# Mimir
 cat <<EOF > mimir-values.yaml
 minio:
   enabled: false
@@ -247,7 +247,39 @@ EOF
 helm upgrade --install mimir grafana/mimir-distributed -n "$NAMESPACE" \
   -f mimir-values.yaml --wait
 
-# 8. Grafana con 3 DataSources
+
+# Prometheus Operator con Remote Write a Mimir
+cat <<EOF > prometheus-values.yaml
+prometheus:
+  prometheusSpec:
+    remoteWrite:
+      - url: "http://mimir-nginx.monitoring.svc.cluster.local:80/api/v1/push"
+        basic_auth:
+          username: "mimir"
+          password: "mimirsecret"
+        tls_config:
+          insecure_skip_verify: true
+
+alertmanager:
+  enabled: false
+grafana:
+  enabled: false
+kubeControllerManager:
+  enabled: true
+kubeScheduler:
+  enabled: true
+nodeExporter:
+  enabled: true
+kubeStateMetrics:
+  enabled: true
+EOF
+
+helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  -n "$NAMESPACE" \
+  -f prometheus-values.yaml \
+  --wait
+
+# Grafana con 3 DataSources
 helm upgrade --install grafana grafana/grafana -n "$NAMESPACE" \
   --set persistence.enabled=true \
   --set persistence.size=2Gi \
@@ -275,9 +307,7 @@ helm upgrade --install grafana grafana/grafana -n "$NAMESPACE" \
     --set datasources."datasources\\.yaml".datasources[2].editable=true \
   --wait
 
-# 10. Crear archivo de configuración para Grafana Alloy
-echo -e "\n>>> 10. Creando archivo de configuración 'alloy-values.yaml'..."
-
+# Crear archivo de configuración para Grafana Alloy
 cat <<EOF > alloy-values.yaml
 _river_config_content: &riverConfigContent |-
   logging {
@@ -431,7 +461,6 @@ EOF
 echo "'alloy-values.yaml' creado."
 
 # 11. Desplegar Grafana Alloy como DaemonSet
-echo -e "\n>>> 11. Desplegando Grafana Alloy como DaemonSet..."
 helm repo update
 helm upgrade --install alloy grafana/alloy -n "$NAMESPACE" -f alloy-values.yaml --wait
 
@@ -446,3 +475,5 @@ echo "  http://localhost:3000"
 echo ""
 echo "Verifica pods:"
 echo "  kubectl get pods -n $NAMESPACE"
+
+rm -f loki-values.yaml tempo-values.yaml mimir-values.yaml prometheus-values.yaml alloy-values.yaml
